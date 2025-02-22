@@ -1,174 +1,197 @@
+import tkinter as tk
+from tkinter import messagebox
 from pymongo import MongoClient
-from pymongo.errors import PyMongoError
-from bson import ObjectId
 import datetime
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
 
-# Create a MongoDB client instance
+# MongoDB client initialization
 client = MongoClient("mongodb://localhost:27017/")  # If you are using a local connection
+db = client["playlist"]  # Access the "playlist" database
+songs_collection = db["songs"]
+playlist_collection = db["playlists"]
+counters_collection = db["counters"]  # Collection to keep track of ID counters
 
-try:
-    # Execute the ping command to check the connection
-    client.admin.command('ping')
-    print("Successfully connected to MongoDB!")
+# Spotify API initialization
+sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id="bea29ba6a3414542b5ef127c8d5508d5",
+                                               client_secret="4730ffcf147748a3bfc563406aab8af5",
+                                               redirect_uri="http://localhost:8888/callback",
+                                               scope=["user-library-read", "playlist-read-private", "playlist-modify-private", "playlist-modify-public"]))
 
-    db = client["playlist"]  # Access the "playlist" database
+
+# Function for creating a new playlist
+def new_playlist():
+    name = name_entry.get()
+    if name == "":
+        messagebox.showwarning("Input Error", "Please enter a playlist name.")
+        return
     
-    # Access the "songs" and "playlists" collections
-    songs_collection = db["songs"]
-    playlist_collection = db["playlists"]
-    counters_collection = db["counters"]  # Collection to keep track of ID counters
-
-    # Initialize the counter if it doesn't exist
-    if counters_collection.count_documents({"_id": "song_id"}) == 0:
-        counters_collection.insert_one({"_id": "song_id", "seq": 0})
-    if counters_collection.count_documents({"_id": "playlist_id"}) == 0:
-        counters_collection.insert_one({"_id": "playlist_id", "seq": 0})
-
-    # Function to get the next sequential ID
-    def get_next_sequence_id(counter_name):
-        counter = counters_collection.find_one_and_update(
-            {"_id": counter_name},
-            {"$inc": {"seq": 1}},
-            return_document=True
-        )
-        return counter["seq"]
-
-    # Function to create a new playlist
-    def new_playlist():
-        name = input("Enter the name of the playlist: ")
-        songs = []  # Initially, the song list will be empty
-        created_at = datetime.datetime.now()
-        updated_at = datetime.datetime.now()
-
-        # Get the next sequential ID
-        playlist_id = get_next_sequence_id("playlist_id")
-
-        playlist = {
-            "_id": playlist_id,
-            "name": name,
-            "songs": songs,
-            "created_at": created_at,
-            "updated_at": updated_at
-        }
-
-        playlist_collection.insert_one(playlist)
-        print(f"Playlist created successfully! ID: {playlist_id}")
-
-    # Function to add a song to a playlist
-    def add_song(playlist_id):
-        # Song details
-        title = input("Enter the song title: ")
-        artist = input("Enter the artist: ")
-        album = input("Enter the album: ")
-        genre = input("Enter the genre: ")
-        duration = input("Enter the song duration (e.g., '3:53'): ")
-
-        # Get the next sequential ID for the song
-        song_id = get_next_sequence_id("song_id")
-
-        # Create the song document
-        song = {
-            "_id": song_id,
-            "title": title,
-            "artist": artist,
-            "album": album,
-            "genre": genre,
-            "duration": duration
-        }
-        
-        # Insert the song into the 'songs' collection
-        songs_collection.insert_one(song)
-        
-        # Update the playlist by adding the song ID
-        playlist_collection.update_one(
-            {"_id": playlist_id}, 
-            {"$push": {"songs": song_id}}  # Add the song ID to the song list
-        )
-        
-        print(f"Song successfully added to the playlist! Song ID: {song_id}")
-
-    # Function to remove a song from a playlist
-    def remove_song(playlist_id, song_id):
-        songs_collection.delete_one({"_id": song_id})  # Remove the song from the 'songs' collection
-        
-        # Update the playlist by removing the song ID from the song list
-        playlist_collection.update_one(
-            {"_id": playlist_id}, 
-            {"$pull": {"songs": song_id}}  # Remove the song ID from the song list
-        )
-        
-        print("Song successfully removed from the playlist!")
-
-    # Function to remove a playlist
-    def remove_playlist(playlist_id):
-        playlist_collection.delete_one({"_id": playlist_id})  # Remove the playlist
-        print("Playlist successfully removed!")
-
-    # Function to display a playlist
-    def display_playlist(playlist_id):
-        playlist = playlist_collection.find_one({"_id": playlist_id})
-        
-        print("Playlist information:")
-        print(f"Name: {playlist['name']}")
-        print("Songs:")
-        
-        for song_id in playlist['songs']:
-            song = songs_collection.find_one({"_id": song_id})
-            print(f"- {song['title']} by {song['artist']} ({song['album']}, {song['duration']})")
-        
-        print(f"Creation date: {playlist['created_at']}")
-        print(f"Last update date: {playlist['updated_at']}")
-
-except PyMongoError as e:  # Handle connection errors
-    print(f"Error: Could not connect to MongoDB. Details: {e}")
-
-
-# Menu options for the user
-print("Welcome to the song playlist")
-while True:
-    print("\n1: View my playlists")
-    print("2: Add a new playlist")
-    print("3: Add a song to a playlist")
-    print("4: Remove a song from a playlist")
-    print("5: Remove a playlist")
-    print("6: Display the Playlist")
-    print("7: Exit")
+    created_at = datetime.datetime.now()
+    updated_at = datetime.datetime.now()
+    playlist_id = get_next_sequence_id("playlist_id")
     
+    playlist = {
+        "_id": playlist_id,
+        "name": name,
+        "songs": [],
+        "created_at": created_at,
+        "updated_at": updated_at
+    }
+    
+    playlist_collection.insert_one(playlist)
+    messagebox.showinfo("Success", f"Playlist created successfully! ID: {playlist_id}")
+
+
+# Function to get the next sequence ID
+def get_next_sequence_id(counter_name):
+    counter = counters_collection.find_one_and_update(
+        {"_id": counter_name},
+        {"$inc": {"seq": 1}},
+        return_document=True
+    )
+    return counter["seq"]
+
+
+# Function to add a song to a playlist and MongoDB
+def add_song_to_playlist():
+    selected_song_index = result_list.curselection()  # Get the selected song index
+    if not selected_song_index:
+        messagebox.showwarning("Selection Error", "Please select a song.")
+        return
+
+    selected_song = result_list.get(selected_song_index[0])  # Get the selected song
+    song_name, artist_name = selected_song.split(" - ")  # Split song name and artist
+    
+    # Search for the song on Spotify
+    result = sp.search(q=f"{song_name} {artist_name}", limit=1, type='track')
+    
+    # Check if the search returned any result
+    if not result['tracks']['items']:
+        messagebox.showwarning("Song Not Found", "No song found matching that title.")
+        return
+    
+    # We have results, so let's extract the first track
+    track = result['tracks']['items'][0]
+    track_id = track['id']
+    track_name = track['name']  # The actual name of the track in Spotify
+    track_artist = track['artists'][0]['name']  # The artist's name from the first artist
+    track_uri = track['uri']  # The URI of the track (Spotify's internal identifier)
+
+    print(f"Found track: {track_name} by {track_artist} (ID: {track_id}, URI: {track_uri})")
+    
+    # Add song to Spotify playlist
+    playlist_id = playlist_id_entry.get()  # Get the playlist ID
+    sp.playlist_add_items(playlist_id, [track_id])  # Add the song to the playlist
+    
+    # Prepare song data to insert into MongoDB
+    song_data = {
+        "name": track_name,  # Using track_name from Spotify
+        "artist": track_artist,  # Using artist_name from Spotify
+        "track_id": track_id,  # Using the track_id from Spotify
+        "uri": track_uri,  # Store the URI for easy reference
+        "added_at": datetime.datetime.now(),
+        "playlist_id": playlist_id
+    }
+
     try:
-        x = int(input("What would you like to do? "))
-        
-        if x == 1:
-            playlists = playlist_collection.find()  # Show all playlists
-            for playlist in playlists:
-                print(f"{playlist['_id']} - {playlist['name']}")
-        
-        elif x == 2:
-            new_playlist()
-        
-        elif x == 3:
-            playlist_id = int(input("Enter the ID of the playlist you want to add a song to: "))
-            add_song(playlist_id)
-        
-        elif x == 4:
-            playlist_id = int(input("Enter the ID of the playlist you want to remove a song from: "))
-            song_id = int(input("Enter the ID of the song to remove: "))
-            remove_song(playlist_id, song_id)
-        
-        elif x == 5:
-            playlist_id = int(input("Enter the ID of the playlist to delete: "))
-            remove_playlist(playlist_id)
-
-        elif x == 6:
-            playlist_id = int(input("Enter the ID of the playlist to view the songs: "))
-            display_playlist(playlist_id)
-
-        
-        elif x == 7:
-            print("Goodbye!")
-            break
-        
+        # Insert the song into the "songs" collection in MongoDB
+        result = songs_collection.insert_one(song_data)
+        if result.inserted_id:
+            print(f"Song inserted successfully into MongoDB with ID: {result.inserted_id}")
         else:
-            print("Invalid option. Try again.")
+            print("Failed to insert the song into MongoDB.")
+        
+        # After inserting the song into the "songs" collection, update the playlist
+        playlist_update = playlist_collection.update_one(
+            {"_id": int(playlist_id)},  # Find the playlist by its ID
+            {"$push": {"songs": song_data}}  # Push the new song to the 'songs' array
+        )
+
+        if playlist_update.modified_count > 0:
+            print(f"Playlist {playlist_id} updated successfully with the new song.")
+        else:
+            print(f"Failed to update playlist {playlist_id}.")
+
+    except Exception as e:
+        print(f"Error inserting song into MongoDB: {e}")
+        messagebox.showerror("Database Error", f"An error occurred while inserting the song into the database: {e}")
     
-    except ValueError:
-        print("Please enter a valid number.")
+    # Show success message
+    messagebox.showinfo("Success", f"Song '{track_name}' by {track_artist} added to playlist and saved to MongoDB!")
+
+
+# Function to show user playlists
+def show_playlists():
+    playlists = sp.current_user_playlists()['items']  # Get user playlists
+    playlists_list.delete(0, tk.END)  # Clear existing list
+    for playlist in playlists:
+        playlists_list.insert(tk.END, playlist['name'])  # Insert playlist name
+
+
+# Function to search for a song on Spotify
+def search_song():
+    track_name = song_name_entry.get()  # Get the song name from the entry
+    if track_name == "":
+        messagebox.showwarning("Input Error", "Please enter a song title.")
+        return
+    
+    result = sp.search(q=track_name, limit=5, type='track')  # Limit to 5 results
+    if not result['tracks']['items']:
+        messagebox.showwarning("Song Not Found", "No song found matching that title.")
+        return
+
+    result_list.delete(0, tk.END)  # Clear previous results
+    for track in result['tracks']['items']:
+        result_list.insert(tk.END, f"{track['name']} - {track['artists'][0]['name']}")  # Insert song name and artist
+
+
+# Main GUI window
+window = tk.Tk()
+window.title("Music Playlist Manager")
+window.geometry("600x600")
+
+# Playlist section
+playlist_label = tk.Label(window, text="Create a New Playlist")
+playlist_label.pack()
+
+name_label = tk.Label(window, text="Enter Playlist Name:")
+name_label.pack()
+name_entry = tk.Entry(window)
+name_entry.pack()
+
+create_playlist_button = tk.Button(window, text="Create Playlist", command=new_playlist)
+create_playlist_button.pack()
+
+# Add song section
+song_label = tk.Label(window, text="Add a Song to Playlist")
+song_label.pack()
+
+playlist_id_label = tk.Label(window, text="Enter Playlist ID:")
+playlist_id_label.pack()
+playlist_id_entry = tk.Entry(window)
+playlist_id_entry.pack()
+
+song_name_label = tk.Label(window, text="Enter Song Title:")
+song_name_label.pack()
+song_name_entry = tk.Entry(window)
+song_name_entry.pack()
+
+search_button = tk.Button(window, text="Search Song", command=search_song)
+search_button.pack()
+
+# Show search results
+result_list = tk.Listbox(window)
+result_list.pack()
+
+add_song_button = tk.Button(window, text="Add Song to Playlist", command=add_song_to_playlist)
+add_song_button.pack()
+
+# Display user playlists
+show_playlists_button = tk.Button(window, text="Show My Playlists", command=show_playlists)
+show_playlists_button.pack()
+
+playlists_list = tk.Listbox(window)
+playlists_list.pack()
+
+# Run the GUI
+window.mainloop()
